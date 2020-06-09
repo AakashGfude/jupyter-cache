@@ -4,7 +4,7 @@ import io
 from pathlib import Path
 import hashlib
 import shutil
-from typing import Iterable, List, Optional, Tuple, Union
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 import nbformat as nbf
 
@@ -355,7 +355,7 @@ class JupyterCacheBase(JupyterCacheAbstract):
             nb.metadata = cache_nb.metadata
         else:
             for key in nb_meta:
-                if key in cache_nb:
+                if key in cache_nb.metadata:
                     nb.metadata[key] = cache_nb.metadata[key]
         for idx in range(len(nb.cells)):
             if nb.cells[idx].cell_type == "code":
@@ -422,32 +422,45 @@ class JupyterCacheBase(JupyterCacheAbstract):
         else:
             NbStageRecord.remove_uris([uri_or_pk], self.db)
 
-    def get_staged_notebook(self, uri_or_pk: Union[int, str]) -> NbBundleIn:
+    # TODO add discard all/multiple staged records method
+
+    def get_staged_notebook(
+        self, uri_or_pk: Union[int, str], converter: Optional[Callable] = None
+    ) -> NbBundleIn:
         """Return a single staged notebook."""
         if isinstance(uri_or_pk, int):
             uri_or_pk = NbStageRecord.record_from_pk(uri_or_pk, self.db).uri
-        notebook = nbf.read(uri_or_pk, NB_VERSION)
+        if not Path(uri_or_pk).exists():
+            raise IOError(
+                "The URI of the staged record no longer exists: {}".format(uri_or_pk)
+            )
+        if converter is None:
+            notebook = nbf.read(uri_or_pk, NB_VERSION)
+        else:
+            notebook = converter(uri_or_pk)
         return NbBundleIn(notebook, uri_or_pk)
 
     def get_cache_record_of_staged(
-        self, uri_or_pk: Union[int, str]
+        self, uri_or_pk: Union[int, str], converter: Optional[Callable] = None
     ) -> Optional[NbCacheRecord]:
         if isinstance(uri_or_pk, int):
             record = NbStageRecord.record_from_pk(uri_or_pk, self.db)
         else:
             record = NbStageRecord.record_from_uri(uri_or_pk, self.db)
-        nb = self.get_staged_notebook(record.uri).nb
+        nb = self.get_staged_notebook(record.uri, converter=converter).nb
         hashkey = self._hash_notebook(nb)
         try:
             return NbCacheRecord.record_from_hashkey(hashkey, self.db)
         except KeyError:
             return None
 
-    def list_staged_unexecuted(self) -> List[NbStageRecord]:
+    def list_staged_unexecuted(
+        self, converter: Optional[Callable] = None
+    ) -> List[NbStageRecord]:
         """List staged notebooks, whose hash is not present in the cached notebooks."""
         records = []
         for record in self.list_staged_records():
-            nb = self.get_staged_notebook(record.uri).nb
+            nb = self.get_staged_notebook(record.uri, converter).nb
             hashkey = self._hash_notebook(nb)
             try:
                 NbCacheRecord.record_from_hashkey(hashkey, self.db)
